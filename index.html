@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Quote Generator with Firestore & Themes</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        :root {
+            --bg-grad-from: #fbcfe8; --bg-grad-to: #e9d5ff; --card-bg: rgba(255, 255, 255, 0.1);
+            --text-primary: #86198f; --text-secondary: #374151; --text-muted: #581c87;
+            --icon-color: #86198f;
+        }
+        .dark {
+            --bg-grad-from: #1e1b4b; --bg-grad-to: #4c1d95; --card-bg: rgba(0, 0, 0, 0.2);
+            --text-primary: #fbcfe8; --text-secondary: #e5e7eb; --text-muted: #e9d5ff;
+            --icon-color: #fbcfe8;
+        }
+        body { font-family: 'Inter', sans-serif; overflow-x: hidden; background-color: var(--bg-grad-from); background-image: linear-gradient(to bottom right, var(--bg-grad-from), var(--bg-grad-to)); transition: background 0.5s; }
+        #bg-canvas, #ai-background { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1; }
+        #ai-background { background-size: cover; background-position: center; opacity: 0; transition: opacity 0.5s; }
+        .quote-card, .modal-content { background: var(--card-bg); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); border: 1px solid rgba(255, 255, 255, 0.2); transition: background 0.5s; }
+        .quote-text { font-family: 'Playfair Display', serif; }
+        .quote-fade-in { opacity: 0; transform: translateY(20px); transition: opacity 0.5s ease-out, transform 0.5s ease-out; }
+        .quote-fade-in.visible { opacity: 1; transform: translateY(0); }
+        #notification { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); transition: opacity 0.5s, transform 0.5s; opacity: 0; pointer-events: none; }
+        #notification.show { opacity: 1; transform: translate(-50%, -10px); }
+        .icon-btn { background: rgba(255, 255, 255, 0.2); transition: background 0.3s; }
+        .icon-btn:hover { background: rgba(255, 255, 255, 0.4); }
+        .modal { transition: opacity 0.3s ease-in-out; }
+        .modal .modal-content { transition: transform 0.3s ease-in-out; }
+        .gemini-btn { background: linear-gradient(45deg, #fb7185, #c084fc); }
+        .text-primary { color: var(--text-primary); } .text-secondary { color: var(--text-secondary); }
+        .text-muted { color: var(--text-muted); } .icon-color { color: var(--icon-color); }
+        .placeholder-color::placeholder { color: var(--text-muted); } .border-color { border-color: var(--text-primary); }
+        #speak-btn.speaking .icon-color { animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .chat-bubble { max-width: 80%; padding: 8px 12px; border-radius: 12px; }
+        .chat-bubble.user { background-color: #c084fc; color: white; align-self: flex-end; }
+        .chat-bubble.ai { background-color: #fbcfe8; color: #581c87; align-self: flex-start; }
+        .dark .chat-bubble.ai { background-color: #4c1d95; color: #fbcfe8; }
+    </style>
+</head>
+<body>
+    <div id="ai-background"></div>
+    <canvas id="bg-canvas"></canvas>
+
+    <!-- App Container (Hidden by default) -->
+    <div id="app-container" class="hidden flex flex-col items-center justify-center min-h-screen w-full p-4 md:p-6">
+        <header class="w-full max-w-2xl flex justify-between items-center mb-4">
+            <div class="flex items-center gap-4">
+                 <select id="category-filter" class="bg-white/30 text-primary p-2 rounded-lg shadow-md hover:bg-white/50 transition"></select>
+                 <div id="user-info" class="text-xs text-primary opacity-70 hidden sm:flex items-center gap-2"></div>
+            </div>
+            <div>
+                <button id="theme-toggle-btn" class="bg-white/30 p-2 rounded-lg shadow-md hover:bg-white/50 transition mr-4"></button>
+                <button id="open-modal-btn" class="bg-white/30 text-primary font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-white/50 transition">My Quotes</button>
+            </div>
+        </header>
+
+        <div class="quote-card rounded-2xl shadow-lg p-8 max-w-2xl w-full text-center mb-8">
+            <h1 class="text-2xl md:text-3xl font-bold text-primary mb-4">Quote of the Moment</h1>
+            <div id="quote-container" class="mb-6 min-h-[150px] flex flex-col justify-center">
+                <blockquote class="text-2xl md:text-4xl text-secondary quote-text quote-fade-in" id="quote-text">Loading...</blockquote>
+                <cite class="text-lg text-muted mt-4 quote-fade-in" id="quote-author"></cite>
+            </div>
+            <div class="flex items-center justify-center space-x-2 mb-8">
+                <button id="copy-btn" title="Copy" class="icon-btn p-3 rounded-full"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-color"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
+                <button id="share-x-btn" title="Share" class="icon-btn p-3 rounded-full"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" class="icon-color" viewBox="0 0 16 16"><path d="M12.6.75h2.454l-5.36 6.142L16 15.25h-4.937l-3.867-5.07-4.425 5.07H.316l5.733-6.57L0 .75h5.063l3.495 4.633L12.601.75Zm-.86 13.028h1.36L4.323 2.145H2.865l8.875 11.633Z"/></svg></button>
+                <button id="speak-btn" title="Speak" class="icon-btn p-3 rounded-full"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-color"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg></button>
+                <button id="discuss-btn" title="Discuss" class="icon-btn p-3 rounded-full"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-color"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></button>
+                <button id="explain-quote-btn" title="Explain" class="icon-btn p-3 rounded-full"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-color"><path d="m12 3-1.9 4.2-4.3.6 3.1 3-1 4.2 3.8-2 3.8 2-1-4.2 3.1-3-4.3-.6z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></svg></button>
+            </div>
+            <div class="space-y-4">
+                <div class="flex flex-col sm:flex-row gap-4 justify-center">
+                     <button id="new-quote-btn" class="bg-pink-500 text-white font-bold py-3 px-8 rounded-full hover:bg-pink-600 transition-all duration-300 transform hover:scale-105 shadow-lg">New Quote</button>
+                     <button id="generate-similar-btn" class="gemini-btn text-white font-bold py-3 px-8 rounded-full transition-all duration-300 transform hover:scale-105 shadow-lg">✨ Generate Similar</button>
+                </div>
+                <div class="flex flex-col sm:flex-row gap-4 justify-center items-center pt-2">
+                    <input type="text" id="mood-input" placeholder="Enter a mood (e.g., happy)" class="w-full sm:w-auto flex-grow p-3 rounded-lg bg-white/50 text-secondary placeholder-color border-2 border-transparent focus:border-color focus:outline-none transition">
+                    <button id="generate-by-mood-btn" class="gemini-btn text-white font-bold py-3 px-6 rounded-lg transition-all duration-300 w-full sm:w-auto transform hover:scale-105 shadow-lg">✨ Generate by Mood</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="quote-card rounded-2xl shadow-lg p-8 max-w-2xl w-full text-center">
+             <h2 class="text-xl md:text-2xl font-bold text-primary mb-4">Add Your Quote to the Cloud</h2>
+             <form id="add-quote-form">
+                <div class="flex flex-col md:flex-row items-center gap-4">
+                    <input type="text" id="new-quote-input" placeholder="The best quote ever..." class="w-full p-3 rounded-lg bg-white/50 text-secondary placeholder-color border-2 border-transparent focus:border-color focus:outline-none transition">
+                    <input type="text" id="new-author-input" placeholder="Author" class="w-full md:w-1/3 p-3 rounded-lg bg-white/50 text-secondary placeholder-color border-2 border-transparent focus:border-color focus:outline-none transition">
+                </div>
+                <div class="flex flex-col md:flex-row items-center gap-4 mt-4">
+                    <input type="text" id="tags-input" placeholder="Tags (e.g. motivation, life)" class="w-full p-3 rounded-lg bg-white/50 text-secondary placeholder-color border-2 border-transparent focus:border-color focus:outline-none transition">
+                    <button type="submit" class="bg-purple-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-purple-600 transition-all duration-300 w-full md:w-auto">Add Quote</button>
+                </div>
+                <div class="mt-4 flex items-center justify-center">
+                    <input type="checkbox" id="is-public-checkbox" class="h-4 w-4 rounded text-pink-500 focus:ring-pink-500 border-gray-300">
+                    <label for="is-public-checkbox" class="ml-2 block text-sm text-muted">Make this quote public for collaborators</label>
+                </div>
+             </form>
+        </div>
+        
+        <footer class="w-full max-w-2xl text-center mt-8">
+            <div class="flex justify-center space-x-6">
+                <a href="privacy.html" target="_blank" class="text-sm text-primary opacity-70 hover:opacity-100 transition">Privacy Policy</a>
+                <a href="terms.html" target="_blank" class="text-sm text-primary opacity-70 hover:opacity-100 transition">Terms of Service</a>
+                <a href="contact.html" target="_blank" class="text-sm text-primary opacity-70 hover:opacity-100 transition">Contact</a>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Auth Container (Visible by default) -->
+    <div id="auth-container" class="flex flex-col items-center justify-center min-h-screen w-full p-4 md:p-6">
+        <div class="quote-card rounded-2xl shadow-lg p-8 max-w-md w-full text-center">
+            <h1 class="text-3xl font-bold text-primary mb-4">Welcome to AI Quotes</h1>
+            <p class="text-muted mb-8">Sign in to save your quotes to the cloud and unlock AI features.</p>
+            
+            <!-- Auth Methods -->
+            <div class="space-y-4">
+                <button id="google-signin-btn" class="bg-white text-gray-700 font-semibold py-3 px-6 rounded-lg hover:bg-gray-200 transition-all duration-300 w-full flex items-center justify-center shadow-md">
+                    <svg class="w-6 h-6 mr-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8c-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C12.955 4 4 12.955 4 24s8.955 20 20 20s20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"/><path fill="#FF3D00" d="m6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C16.318 4 9.656 8.337 6.306 14.691z"/><path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238A11.91 11.91 0 0 1 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z"/><path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303c-.792 2.443-2.527 4.483-4.803 5.786l6.19 5.238C42.021 35.596 44 30.138 44 24c0-1.341-.138-2.65-.389-3.917z"/></svg>
+                    Sign in with Google
+                </button>
+                <div id="phone-auth-container">
+                    <button id="phone-signin-btn" class="bg-green-500 text-white font-semibold py-3 px-6 rounded-lg hover:bg-green-600 transition-all duration-300 w-full">Sign in with Phone</button>
+                    <div id="phone-fields" class="hidden space-y-4 mt-4">
+                        <input type="tel" id="phone-number-input" placeholder="e.g. +16505551234" class="w-full p-3 rounded-lg bg-white/50 text-secondary placeholder-color border-2 border-transparent focus:border-color focus:outline-none transition">
+                        <button id="send-code-btn" class="w-full bg-blue-500 text-white font-semibold py-2 px-4 rounded-lg hover:bg-blue-600">Send Verification Code</button>
+                        <input type="text" id="verification-code-input" placeholder="Verification Code" class="w-full p-3 rounded-lg bg-white/50 text-secondary placeholder-color border-2 border-transparent focus:border-color focus:outline-none transition hidden">
+                        <button id="verify-code-btn" class="w-full bg-blue-500 text-white font-semibold py-2 px-4 rounded-lg hover:bg-blue-600 hidden">Verify Code</button>
+                        <div id="recaptcha-container"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="my-4 text-center text-muted">OR</div>
+            <form id="email-form" class="space-y-4">
+                <input type="email" id="email-input" placeholder="Email" required class="w-full p-3 rounded-lg bg-white/50 text-secondary placeholder-color border-2 border-transparent focus:border-color focus:outline-none transition">
+                <input type="password" id="password-input" placeholder="Password" required class="w-full p-3 rounded-lg bg-white/50 text-secondary placeholder-color border-2 border-transparent focus:border-color focus:outline-none transition">
+                <div class="flex gap-4">
+                    <button type="submit" id="email-signin-btn" class="w-full bg-purple-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-purple-600 transition-all duration-300">Sign In</button>
+                    <button type="submit" id="email-signup-btn" class="w-full bg-pink-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-pink-600 transition-all duration-300">Sign Up</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <div id="notification" class="bg-gray-800 text-white py-2 px-4 rounded-lg shadow-xl"></div>
+
+    <div id="manage-quotes-modal" class="modal fixed inset-0 bg-black/50 flex items-center justify-center p-4 hidden opacity-0">
+        <div class="modal-content rounded-2xl shadow-lg p-8 max-w-2xl w-full transform scale-95 flex flex-col">
+            <div class="flex justify-between items-center mb-6"><h2 class="text-2xl font-bold text-primary">My Quotes</h2><button data-close-modal class="text-primary hover:opacity-70"><svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" fill="none"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button></div>
+            <div id="custom-quotes-list" class="space-y-4 flex-grow overflow-y-auto pr-2"></div>
+            <div class="mt-6 pt-4 border-t border-white/20 space-y-4">
+                <div><h3 class="text-lg font-semibold text-primary mb-2">Collaboration</h3><form id="add-collaborator-form" class="flex gap-2"><input type="text" id="collaborator-id-input" placeholder="Enter User ID" class="flex-grow p-2 rounded-lg bg-white/50 text-secondary placeholder-color border-2 border-transparent focus:border-color focus:outline-none transition"><button type="submit" class="bg-green-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-green-600">Add</button></form></div>
+                <div><h3 class="text-lg font-semibold text-primary mb-2">Notifications</h3><button id="enable-notifications-btn" class="w-full bg-blue-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-600">Enable Daily Quotes</button></div>
+            </div>
+        </div>
+    </div>
+    
+    <div id="explanation-modal" class="modal fixed inset-0 bg-black/50 flex items-center justify-center p-4 hidden opacity-0">
+        <div class="modal-content rounded-2xl shadow-lg p-8 max-w-2xl w-full transform scale-95"><div class="flex justify-between items-center mb-6"><h2 class="text-2xl font-bold text-primary">✨ Quote Explained</h2><button data-close-modal class="text-primary hover:opacity-70"><svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" fill="none"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button></div><div id="explanation-content" class="text-muted space-y-4 max-h-80 overflow-y-auto pr-2"></div></div>
+    </div>
+
+    <div id="discussion-modal" class="modal fixed inset-0 bg-black/50 flex items-center justify-center p-4 hidden opacity-0">
+        <div class="modal-content rounded-2xl shadow-lg p-8 max-w-2xl w-full transform scale-95 flex flex-col h-[80vh]">
+            <div class="flex justify-between items-center mb-4"><h2 class="text-2xl font-bold text-primary">💬 Discuss Quote</h2><button data-close-modal class="text-primary hover:opacity-70"><svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" fill="none"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button></div>
+            <div id="chat-messages" class="flex-grow overflow-y-auto pr-2 space-y-4 flex flex-col"></div>
+            <form id="chat-form" class="mt-4 flex gap-2"><input type="text" id="chat-input" placeholder="Ask a question..." class="flex-grow p-3 rounded-lg bg-white/50 text-secondary placeholder-color border-2 border-transparent focus:border-color focus:outline-none transition"><button type="submit" class="bg-purple-500 text-white font-bold p-3 rounded-lg hover:bg-purple-600">Send</button></form>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, RecaptchaVerifier, signInWithPhoneNumber, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, addDoc, deleteDoc, query, where, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // PASTE YOUR FIREBASE CONFIGURATION HERE
+        const firebaseConfig = {
+          apiKey: "AIzaSyC7sDyIASx7GA4nyl6zhfnnFGf1spEFwM4",
+          authDomain: "quotespark-36304.firebaseapp.com",
+          projectId: "quotespark-36304",
+          storageBucket: "quotespark-36304.appspot.com",
+          messagingSenderId: "537598205306",
+          appId: "1:537598205306:web:8e9018d930bd7bb9a98ac3"
+        };
+
+        const DOMElements = {
+            appContainer: document.getElementById('app-container'), authContainer: document.getElementById('auth-container'),
+            quoteText: document.getElementById('quote-text'), quoteAuthor: document.getElementById('quote-author'),
+            newQuoteBtn: document.getElementById('new-quote-btn'), copyBtn: document.getElementById('copy-btn'),
+            shareXBtn: document.getElementById('share-x-btn'), addQuoteForm: document.getElementById('add-quote-form'),
+            newQuoteInput: document.getElementById('new-quote-input'), newAuthorInput: document.getElementById('new-author-input'),
+            tagsInput: document.getElementById('tags-input'), isPublicCheckbox: document.getElementById('is-public-checkbox'),
+            notification: document.getElementById('notification'), openModalBtn: document.getElementById('open-modal-btn'),
+            manageQuotesModal: document.getElementById('manage-quotes-modal'), customQuotesList: document.getElementById('custom-quotes-list'),
+            explanationModal: document.getElementById('explanation-modal'), explanationContent: document.getElementById('explanation-content'),
+            explainQuoteBtn: document.getElementById('explain-quote-btn'), generateSimilarBtn: document.getElementById('generate-similar-btn'),
+            themeToggleBtn: document.getElementById('theme-toggle-btn'), speakBtn: document.getElementById('speak-btn'),
+            userInfo: document.getElementById('user-info'), addCollaboratorForm: document.getElementById('add-collaborator-form'),
+            collaboratorIdInput: document.getElementById('collaborator-id-input'), categoryFilter: document.getElementById('category-filter'),
+            aiBackground: document.getElementById('ai-background'),
+            discussBtn: document.getElementById('discuss-btn'), discussionModal: document.getElementById('discussion-modal'),
+            chatMessages: document.getElementById('chat-messages'), chatForm: document.getElementById('chat-form'), chatInput: document.getElementById('chat-input'),
+            enableNotificationsBtn: document.getElementById('enable-notifications-btn'),
+            moodInput: document.getElementById('mood-input'), generateByMoodBtn: document.getElementById('generate-by-mood-btn'),
+            googleSigninBtn: document.getElementById('google-signin-btn'), emailForm: document.getElementById('email-form'),
+            emailInput: document.getElementById('email-input'), passwordInput: document.getElementById('password-input'),
+            emailSigninBtn: document.getElementById('email-signin-btn'), emailSignupBtn: document.getElementById('email-signup-btn'),
+            phoneSigninBtn: document.getElementById('phone-signin-btn'), phoneFields: document.getElementById('phone-fields'),
+            phoneNumberInput: document.getElementById('phone-number-input'), sendCodeBtn: document.getElementById('send-code-btn'),
+            verificationCodeInput: document.getElementById('verification-code-input'), verifyCodeBtn: document.getElementById('verify-code-btn'),
+            recaptchaContainer: document.getElementById('recaptcha-container'),
+        };
+
+        const sunIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-color"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>`;
+        const moonIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-color"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>`;
+        
+        const defaultQuotes = [
+            { content: "The only way to do great work is to love what you do.", author: "Steve Jobs", tags: ["motivation", "work"] },
+            { content: "Believe you can and you're halfway there.", author: "Theodore Roosevelt", tags: ["motivation", "belief"] },
+            { content: "Success is not final, failure is not fatal: It is the courage to continue that counts.", author: "Winston Churchill", tags: ["success", "failure", "courage"] },
+            { content: "The future belongs to those who believe in the beauty of their dreams.", author: "Eleanor Roosevelt", tags: ["dreams", "hope", "future"] },
+            { content: "It does not matter how slowly you go as long as you do not stop.", author: "Confucius", tags: ["perseverance", "motivation"] },
+            { content: "Everything you’ve ever wanted is on the other side of fear.", author: "George Addair", tags: ["fear", "courage"] },
+            { content: "The secret of getting ahead is getting started.", author: "Mark Twain", tags: ["motivation", "action"] },
+            { content: "It always seems impossible until it’s done.", author: "Nelson Mandela", tags: ["motivation", "success"] },
+            { content: "Don’t quit. Suffer now and live the rest of your life as a champion.", author: "Muhammad Ali", tags: ["perseverance", "motivation"] },
+            { content: "If you can dream it, you can do it.", author: "Walt Disney", tags: ["dreams", "motivation"] },
+            { content: "Success is liking yourself, liking what you do, and liking how you do it.", author: "Maya Angelou", tags: ["success", "self-love"] },
+            { content: "The best revenge is massive success.", author: "Frank Sinatra", tags: ["success", "motivation"] },
+            { content: "You know you’re in love when you can’t fall asleep because reality is finally better than your dreams.", author: "Dr. Seuss", tags: ["love", "dreams"] },
+            { content: "Being deeply loved by someone gives you strength, while loving someone deeply gives you courage.", author: "Lao Tzu", tags: ["love", "courage", "strength"] },
+            { content: "Where there is love there is life.", author: "Mahatma Gandhi", tags: ["love", "life"] },
+            { content: "The best thing to hold onto in life is each other.", author: "Audrey Hepburn", tags: ["love", "life"] },
+            { content: "Love is a friendship set to music.", author: "Joseph Campbell", tags: ["love", "friendship"] },
+            { content: "We accept the love we think we deserve.", author: "Stephen Chbosky", tags: ["love", "self-worth"] },
+            { content: "Love is the only force capable of transforming an enemy into a friend.", author: "Martin Luther King Jr.", tags: ["love", "peace"] },
+            { content: "There is only one happiness in life: to love and be loved.", author: "George Sand", tags: ["love", "happiness"] },
+            { content: "I'm not arguing, I'm just explaining why I'm right.", author: null, tags: ["humor"] },
+            { content: "Life is short. Smile while you still have teeth.", author: null, tags: ["humor", "life"] },
+            { content: "Why don’t scientists trust atoms? Because they make up everything.", author: null, tags: ["humor", "science"] },
+            { content: "People say nothing is impossible, but I do nothing every day.", author: null, tags: ["humor", "procrastination"] },
+            { content: "The early bird might get the worm, but the second mouse gets the cheese.", author: null, tags: ["humor", "wisdom"] },
+            { content: "A balanced diet means a cupcake in each hand.", author: null, tags: ["humor", "food"] },
+            { content: "The purpose of our lives is to be happy.", author: "Dalai Lama", tags: ["life", "happiness", "philosophy"] },
+            { content: "Life isn’t about finding yourself. Life is about creating yourself.", author: "George Bernard Shaw", tags: ["life", "self", "philosophy"] },
+            { content: "Turn your wounds into wisdom.", author: "Oprah Winfrey", tags: ["life", "wisdom"] },
+            { content: "Life is 10% what happens to us and 90% how we react to it.", author: "Charles R. Swindoll", tags: ["life", "perspective"] },
+            { content: "Life is really simple, but we insist on making it complicated.", author: "Confucius", tags: ["life", "simplicity", "philosophy"] },
+            { content: "The two most important days in your life are the day you are born and the day you find out why.", author: "Mark Twain", tags: ["life", "purpose", "philosophy"] },
+            { content: "Life is like riding a bicycle. To keep your balance, you must keep moving.", author: "Albert Einstein", tags: ["life", "perseverance"] },
+            { content: "To live is the rarest thing in the world. Most people exist, that is all.", author: "Oscar Wilde", tags: ["life", "existence", "philosophy"] },
+            { content: "The unexamined life is not worth living.", author: "Socrates", tags: ["life", "philosophy"] },
+            { content: "The mind is everything. What you think you become.", author: "Buddha", tags: ["mind", "philosophy"] }
+        ];
+        let allQuotes = [...defaultQuotes], db, auth, userId, discussionHistory = [], confirmationResult;
+        const collaborators = new Set();
+        
+        function showNotification(message) { DOMElements.notification.textContent = message; DOMElements.notification.classList.add('show'); setTimeout(() => { DOMElements.notification.classList.remove('show'); }, 3000); }
+        function displayQuote(quoteObject) { DOMElements.quoteText.classList.remove('visible'); DOMElements.quoteAuthor.classList.remove('visible'); setTimeout(() => { DOMElements.quoteText.textContent = `“${quoteObject.content}”`; DOMElements.quoteAuthor.textContent = `— ${quoteObject.author || 'Unknown'}`; DOMElements.quoteText.classList.add('visible'); DOMElements.quoteAuthor.classList.add('visible'); }, 500); }
+        
+        function generateNewQuote() {
+            const category = DOMElements.categoryFilter.value;
+            const filteredQuotes = category === 'all' ? allQuotes : allQuotes.filter(q => q.tags && q.tags.includes(category));
+            if (filteredQuotes.length === 0) { displayQuote({ content: "No quotes in this category. Try another!", author: "App" }); return; }
+            const randomIndex = Math.floor(Math.random() * filteredQuotes.length);
+            displayQuote(filteredQuotes[randomIndex]);
+        }
+        
+        function copyToClipboard(text) { const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px'; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); showNotification('Copied!'); } catch (err) { showNotification('Could not copy.'); } document.body.removeChild(ta); }
+        function openModal(modal) { modal.classList.remove('hidden'); setTimeout(() => { modal.classList.remove('opacity-0'); modal.querySelector('.modal-content').classList.remove('scale-95'); }, 10); }
+        function closeModal(modal) { modal.classList.add('opacity-0'); modal.querySelector('.modal-content').classList.add('scale-95'); setTimeout(() => modal.classList.add('hidden'), 300); }
+        document.querySelectorAll('[data-close-modal]').forEach(btn => btn.addEventListener('click', () => closeModal(btn.closest('.modal'))));
+        function applyTheme(theme) { if (theme === 'dark') { document.body.classList.add('dark'); DOMElements.themeToggleBtn.innerHTML = sunIcon; } else { document.body.classList.remove('dark'); DOMElements.themeToggleBtn.innerHTML = moonIcon; } }
+        
+        async function initializeFirebase() {
+            try {
+                if (!firebaseConfig.apiKey) throw new Error("Firebase config not found.");
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app); auth = getAuth(app);
+                
+                onAuthStateChanged(auth, user => {
+                    if (user) {
+                        userId = user.uid;
+                        DOMElements.authContainer.classList.add('hidden');
+                        DOMElements.appContainer.classList.remove('hidden');
+                        
+                        const userPhoto = user.photoURL ? `<img src="${user.photoURL}" class="w-6 h-6 rounded-full">` : '';
+                        const userName = user.displayName || user.email || 'User';
+                        DOMElements.userInfo.innerHTML = `${userPhoto} <span class="font-semibold">${userName}</span> <button id="signout-btn" class="ml-2 text-xs opacity-70 hover:opacity-100">[Sign Out]</button>`;
+                        document.getElementById('signout-btn').addEventListener('click', () => signOut(auth));
+
+                        attachFirestoreListeners();
+                        generateNewQuote();
+                    } else {
+                        userId = null;
+                        DOMElements.authContainer.classList.remove('hidden');
+                        DOMElements.appContainer.classList.add('hidden');
+                    }
+                });
+            } catch (error) { DOMElements.authContainer.innerHTML = `<p class="text-red-500 text-center">Could not connect to services. Please refresh.</p>`; }
+        }
+
+        function attachFirestoreListeners() { if (!userId) return; onSnapshot(collection(db, `users/${userId}/private_quotes`), loadAllQuotesFromFirestore); onSnapshot(collection(db, `public_quotes`), loadAllQuotesFromFirestore); onSnapshot(doc(db, `users/${userId}/collaborators`, 'list'), doc => { const data = doc.data(); if (data && data.ids) { collaborators.clear(); data.ids.forEach(id => collaborators.add(id)); loadAllQuotesFromFirestore(); } }); }
+        async function loadAllQuotesFromFirestore() { if (!userId) return; const privateRef = collection(db, `users/${userId}/private_quotes`); const publicQuery = query(collection(db, `public_quotes`), where("ownerId", "==", userId)); const [privateSnap, publicSnap] = await Promise.all([getDocs(privateRef), getDocs(publicQuery)]); const myPrivate = privateSnap.docs.map(d => ({ id: d.id, isPublic: false, ...d.data() })); const myPublic = publicSnap.docs.map(d => ({ id: d.id, isPublic: true, ...d.data() })); const collabPromises = Array.from(collaborators).map(id => getDocs(query(collection(db, `public_quotes`), where("ownerId", "==", id)))); const collabSnaps = await Promise.all(collabPromises); const collabQuotes = collabSnaps.flatMap(s => s.docs.map(d => ({ id: d.id, isPublic: true, from: 'collab', ...d.data() }))); allQuotes = [...defaultQuotes, ...myPrivate, ...myPublic, ...collabQuotes]; populateQuotesModal(); updateCategoryFilter(); }
+        async function handleAddQuote(e) { e.preventDefault(); if (!userId) { showNotification("You must be logged in."); return; } const content = DOMElements.newQuoteInput.value.trim(); const author = DOMElements.newAuthorInput.value.trim() || 'Anonymous'; const tags = DOMElements.tagsInput.value.split(',').map(t => t.trim()).filter(Boolean); if (content) { const quoteData = { content, author, ownerId: userId, createdAt: new Date(), tags }; const collectionPath = DOMElements.isPublicCheckbox.checked ? `public_quotes` : `users/${userId}/private_quotes`; try { await addDoc(collection(db, collectionPath), quoteData); showNotification('Quote added!'); DOMElements.addQuoteForm.reset(); displayQuote(quoteData); } catch (error) { showNotification("Failed to add quote."); } } }
+        async function handleDeleteQuote(id, isPublic) { if (!userId) return; const path = isPublic ? `public_quotes` : `users/${userId}/private_quotes`; try { await deleteDoc(doc(db, path, id)); showNotification("Quote deleted."); } catch (error) { showNotification("Failed to delete."); } }
+        async function handleAddCollaborator(e) { e.preventDefault(); const newId = DOMElements.collaboratorIdInput.value.trim(); if (newId && newId !== userId) { collaborators.add(newId); const ref = doc(db, `users/${userId}/collaborators`, 'list'); await setDoc(ref, { ids: Array.from(collaborators) }, { merge: true }); showNotification("Collaborator added!"); DOMElements.collaboratorIdInput.value = ''; } }
+        function populateQuotesModal() { DOMElements.customQuotesList.innerHTML = ''; const myQuotes = allQuotes.filter(q => q.ownerId === userId); if (myQuotes.length === 0) { DOMElements.customQuotesList.innerHTML = `<p class="text-muted text-center">No quotes added yet.</p>`; return; } myQuotes.forEach(q => { const el = document.createElement('div'); el.className = 'flex items-center justify-between bg-white/20 p-3 rounded-lg'; el.innerHTML = `<div class="flex-1 min-w-0 text-left pr-4"><p class="text-secondary font-semibold break-words">“${q.content}”</p><p class="text-sm text-muted">— ${q.author} ${q.isPublic ? '(Public)' : '(Private)'}</p></div><button data-id="${q.id}" data-public="${q.isPublic}" class="delete-quote-btn text-red-500 p-2 flex-shrink-0"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>`; DOMElements.customQuotesList.appendChild(el); }); document.querySelectorAll('.delete-quote-btn').forEach(b => b.addEventListener('click', e => handleDeleteQuote(e.currentTarget.dataset.id, e.currentTarget.dataset.public === 'true'))); }
+        function updateCategoryFilter() { const userTags = new Set(allQuotes.flatMap(q => q.tags || [])); DOMElements.categoryFilter.innerHTML = '<option value="all">All Categories</option>'; userTags.forEach(tag => DOMElements.categoryFilter.innerHTML += `<option value="${tag}">${tag.charAt(0).toUpperCase() + tag.slice(1)}</option>`); }
+        
+        const API_KEY = "AIzaSyC1kp9PNIMjYrHuAIfZQhnuoxzbJiMCoPE";
+        const GEMINI_API_URL = (model) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${API_KEY}`;
+        
+        async function callGeminiAPI(prompt, model, isJson = false) { const payload = { contents: [{ parts: [{ text: prompt }] }] }; if (isJson) { payload.generationConfig = { responseMimeType: "application/json", responseSchema: { type: "OBJECT", properties: { content: { "type": "STRING" }, author: { "type": "STRING" } }, required: ["content", "author"] } } } try { const r = await fetch(GEMINI_API_URL(model), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); if (!r.ok) throw new Error(r.statusText); const d = await r.json(); return d.candidates[0].content.parts[0].text; } catch (e) { console.error("API fail:", e); showNotification("AI feature failed."); return null; } }
+        async function callImageGenerationAPI(prompt) { const model = 'gemini-2.0-flash-preview-image-generation'; const payload = { contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseModalities: ['IMAGE'] }, }; try { const r = await fetch(GEMINI_API_URL(model), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); if (!r.ok) throw new Error(`API Error: ${r.statusText}`); const d = await r.json(); const base64Data = d?.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data; if (!base64Data) throw new Error("No image data in API response."); return base64Data; } catch (e) { console.error("Image generation fail:", e); showNotification("AI background failed."); return null; } }
+        
+        DOMElements.themeToggleBtn.addEventListener('click', () => { const newTheme = document.body.classList.contains('dark') ? 'light' : 'dark'; applyTheme(newTheme); localStorage.setItem('theme', newTheme); });
+        DOMElements.speakBtn.addEventListener('click', () => { if (speechSynthesis.speaking) { speechSynthesis.cancel(); return; } const u = new SpeechSynthesisUtterance(`${DOMElements.quoteText.innerText}. By ${DOMElements.quoteAuthor.innerText}.`); u.onstart = () => DOMElements.speakBtn.classList.add('speaking'); u.onend = () => DOMElements.speakBtn.classList.remove('speaking'); speechSynthesis.speak(u); });
+        DOMElements.newQuoteBtn.addEventListener('click', generateNewQuote);
+        DOMElements.copyBtn.addEventListener('click', () => copyToClipboard(`${DOMElements.quoteText.innerText} ${DOMElements.quoteAuthor.innerText}`));
+        DOMElements.shareXBtn.addEventListener('click', () => window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(`${DOMElements.quoteText.innerText} ${DOMElements.quoteAuthor.innerText}`)}`, '_blank'));
+        DOMElements.addQuoteForm.addEventListener('submit', handleAddQuote);
+        DOMElements.openModalBtn.addEventListener('click', () => { populateQuotesModal(); openModal(DOMElements.manageQuotesModal); });
+        DOMElements.addCollaboratorForm.addEventListener('submit', handleAddCollaborator);
+        DOMElements.categoryFilter.addEventListener('change', generateNewQuote);
+        DOMElements.explainQuoteBtn.addEventListener('click', async () => { DOMElements.explanationContent.innerHTML = '<p>✨ Thinking...</p>'; openModal(DOMElements.explanationModal); const prompt = `Explain: "${DOMElements.quoteText.innerText.slice(1, -1)}" by ${DOMElements.quoteAuthor.innerText.slice(2)}`; const explanation = await callGeminiAPI(prompt, 'gemini-2.5-flash-preview-05-20'); DOMElements.explanationContent.innerText = explanation || "Failed to get explanation."; });
+        DOMElements.generateSimilarBtn.addEventListener('click', async () => { DOMElements.generateSimilarBtn.disabled = true; DOMElements.generateSimilarBtn.innerText = '✨ Generating...'; const prompt = `Generate a new, original quote with a similar theme to "${DOMElements.quoteText.innerText.slice(1, -1)}". The author should be "AI Philosopher".`; const result = await callGeminiAPI(prompt, 'gemini-2.5-flash-preview-05-20', true); if (result) displayQuote(JSON.parse(result)); DOMElements.generateSimilarBtn.disabled = false; DOMElements.generateSimilarBtn.innerText = '✨ Generate Similar'; });
+        DOMElements.generateByMoodBtn.addEventListener('click', async () => { const mood = DOMElements.moodInput.value.trim(); if (!mood) { showNotification("Please enter a mood."); return; } DOMElements.generateByMoodBtn.disabled = true; DOMElements.generateByMoodBtn.innerText = '✨ Generating...'; const prompt = `Generate a new, original quote suitable for someone feeling "${mood}". The author should be "AI Philosopher".`; const result = await callGeminiAPI(prompt, 'gemini-2.5-flash-preview-05-20', true); if (result) displayQuote(JSON.parse(result)); DOMElements.generateByMoodBtn.disabled = false; DOMElements.generateByMoodBtn.innerText = '✨ Generate by Mood'; });
+        DOMElements.discussBtn.addEventListener('click', async () => { openModal(DOMElements.discussionModal); DOMElements.chatMessages.innerHTML = '<p class="text-muted text-center">✨ AI is preparing the discussion...</p>'; const q = DOMElements.quoteText.innerText.slice(1, -1); const a = DOMElements.quoteAuthor.innerText.slice(2); const prompt = `You are a helpful assistant who discusses philosophical quotes. The user wants to discuss: "${q}" by ${a}. Start the conversation by asking the user what they think about it.`; discussionHistory = [{ role: "user", parts: [{ text: prompt }] }]; const response = await callGeminiAPI(prompt, 'gemini-2.5-flash-preview-05-20'); if (response) { discussionHistory.push({ role: "model", parts: [{ text: response }] }); DOMElements.chatMessages.innerHTML = `<div class="chat-bubble ai">${response}</div>`; } });
+        DOMElements.chatForm.addEventListener('submit', async (e) => { e.preventDefault(); const userMessage = DOMElements.chatInput.value.trim(); if (!userMessage) return; DOMElements.chatInput.value = ''; DOMElements.chatMessages.innerHTML += `<div class="chat-bubble user">${userMessage}</div>`; DOMElements.chatMessages.scrollTop = DOMElements.chatMessages.scrollHeight; discussionHistory.push({ role: "user", parts: [{ text: userMessage }] }); const response = await callGeminiAPI(discussionHistory.map(m => m.parts[0].text).join('\n'), 'gemini-2.5-flash-preview-05-20'); if (response) { discussionHistory.push({ role: "model", parts: [{ text: response }] }); DOMElements.chatMessages.innerHTML += `<div class="chat-bubble ai">${response}</div>`; DOMElements.chatMessages.scrollTop = DOMElements.chatMessages.scrollHeight; } });
+        DOMElements.enableNotificationsBtn.addEventListener('click', () => { if (!('Notification' in window)) { showNotification("Notifications not supported."); return; } Notification.requestPermission().then(p => { if (p === 'granted') { showNotification("Daily notifications enabled!"); localStorage.setItem('notifications_enabled', 'true'); } else { showNotification("Notifications permission denied."); } }); });
+        function showDailyNotification() { if (localStorage.getItem('notifications_enabled') === 'true') { const today = new Date().toDateString(); if (localStorage.getItem('last_notification_date') !== today) { const randomQuote = allQuotes[Math.floor(Math.random() * allQuotes.length)]; new Notification("Your Quote of the Day", { body: `"${randomQuote.content}" — ${randomQuote.author}`, icon: "/favicon.ico" }); localStorage.setItem('last_notification_date', today); } } }
+        
+        // --- New Auth Event Listeners ---
+        DOMElements.googleSigninBtn.addEventListener('click', async () => { const provider = new GoogleAuthProvider(); try { await signInWithPopup(auth, provider); } catch (error) { showNotification(error.message); } });
+        DOMElements.emailSignupBtn.addEventListener('click', async (e) => { e.preventDefault(); const email = DOMElements.emailInput.value; const password = DOMElements.passwordInput.value; try { await createUserWithEmailAndPassword(auth, email, password); } catch (error) { showNotification(error.message); } });
+        DOMElements.emailSigninBtn.addEventListener('click', async (e) => { e.preventDefault(); const email = DOMElements.emailInput.value; const password = DOMElements.passwordInput.value; try { await signInWithEmailAndPassword(auth, email, password); } catch (error) { showNotification(error.message); } });
+        DOMElements.phoneSigninBtn.addEventListener('click', () => { DOMElements.phoneFields.classList.remove('hidden'); window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', { 'size': 'invisible' }); });
+        DOMElements.sendCodeBtn.addEventListener('click', async () => { const phoneNumber = DOMElements.phoneNumberInput.value; const appVerifier = window.recaptchaVerifier; try { confirmationResult = await signInWithPhoneNumber(auth, phoneNumber, appVerifier); showNotification('Verification code sent!'); DOMElements.verificationCodeInput.classList.remove('hidden'); DOMElements.verifyCodeBtn.classList.remove('hidden'); } catch (error) { showNotification('Error sending code: ' + error.message); } });
+        DOMElements.verifyCodeBtn.addEventListener('click', async () => { const code = DOMElements.verificationCodeInput.value; try { await confirmationResult.confirm(code); showNotification('Phone number verified!'); } catch (error) { showNotification('Error verifying code: ' + error.message); } });
+
+        let scene, camera, renderer, shapes;
+        function init3D() { scene = new THREE.Scene(); camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000); camera.position.z = 5; renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('bg-canvas'), alpha: true }); renderer.setSize(window.innerWidth, window.innerHeight); renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); scene.add(new THREE.AmbientLight(0xffffff, 0.5)); const light = new THREE.PointLight(0xffc0cb, 1); light.position.set(5, 5, 5); scene.add(light); shapes = new THREE.Group(); const geo = new THREE.IcosahedronGeometry(1, 0); for (let i = 0; i < 50; i++) { const mat = new THREE.MeshStandardMaterial({ color: Math.random() < 0.5 ? 0xffa5b5 : 0xead8f0, roughness: 0.6, metalness: 0.1 }); const mesh = new THREE.Mesh(geo, mat); mesh.position.set((Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20); mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI); const scale = Math.random() * 0.2 + 0.1; mesh.scale.set(scale, scale, scale); shapes.add(mesh); } scene.add(shapes); animate(); }
+        const clock = new THREE.Clock(); function animate() { shapes.rotation.y = clock.getElapsedTime() * 0.05; renderer.render(scene, camera); requestAnimationFrame(animate); }
+        window.addEventListener('resize', () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
+
+        document.addEventListener('DOMContentLoaded', () => { const savedTheme = localStorage.getItem('theme') || 'light'; applyTheme(savedTheme); init3D(); initializeFirebase().then(() => { showDailyNotification(); }); });
+    </script>
+</body>
+</html>
